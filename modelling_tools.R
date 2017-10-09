@@ -1,14 +1,21 @@
-dfa <- function(x, label = NULL, maxfac = NULL) {
+pcdfa <- function(x, label = NULL, no_pc = 10, maxfac = NULL) {
     if (is.null(label))
         label <- row.names(x)
     unique_label <- unique(label)
     no_class <- length(unique_label)
     if (no_class < 2) stop("Number of classes must > 1")
-    if (maxfac > no_class - 1) {
-        print("Too many DFs to be extracted, set it to group - 1")
+    if (maxfac > no_class - 1 || is.null(maxfac)) {
+        print("No. of DF is missing or too many DFs to be extracted, set it to group - 1")
         maxfac <- no_class - 1
     }
+
+    xmean <- colMeans(x)
+    pca_results <- prcomp(x)
+    x <- pca_results$x[,1:no_pc]
+    pc_loadings <- pca_results$rotation[,1:no_pc]
+
     mx <- colMeans(x)
+
     K <- x[label == unique_label[1],]
     ns <- dim(K)[1]
     nv <- dim(K)[2]
@@ -35,7 +42,14 @@ dfa <- function(x, label = NULL, maxfac = NULL) {
     P_eigen$vectors <- Re(P_eigen$vectors[, 1:maxfac])
     V <- P_eigen$vectors
     U <- x %*% V
-    results <- list(scores = U, loadings = V, eigenvalues = P_eigen$values)
+    loadings <- pc_loadings %*% V
+    results <- list(scores = U, loadings = loadings, eigenvalues = P_eigen$values, xmean = xmean)
+}
+
+pcdfa_pred <- function(x, model = NULL) {
+    x <- t(apply(x, 1, "-", model$xmean))
+    prediction <- x %*% model$loadings
+    return(prediction)
 }
 
 plsboots <- function(data = NULL, label = NULL, rep_idx = NULL, iter = 1000, lv = NULL, type = "r", perm = FALSE) {
@@ -152,7 +166,7 @@ plsr_boots <- function(data, label, rep_idx, iter, lv, perm) {
     return(results)
 }
 
-plsda_boots <- function(data, label, rep_idx, iter, lv, perm) {
+plsda_boots <- function(data, label, rep_idx, iter=1000, lv, perm=FALSE) {
   if (is.null(lv)) {
     lv <- min(dim(data))
   }
@@ -164,7 +178,7 @@ plsda_boots <- function(data, label, rep_idx, iter, lv, perm) {
   if (length(nvY) == 1) {
     unique_class = unique(label)
     nc <- length(unique_class)
-    label_da <- matrix(0, nsY, nc)
+    label_da <- matrix(0, ns, nc)
     for (i in 1:length(unique_class))
       label_da[label == unique_class[i], i] = 1
   } 
@@ -188,16 +202,18 @@ plsda_boots <- function(data, label, rep_idx, iter, lv, perm) {
     conf_mat_perm <- replicate(iter, matrix(0, nc ,nc))
   }
   for (i in 1:iter) {
-    print(i)
-    
-    boot_idx <- boots(rep_idx)
-    data_trn <- data[boot_idx$trn_idx,]
-    label_trn <- label_da[boot_idx$trn_idx,]
-    rep_trn <- as.matrix(rep_idx[boot_idx$trn_idx,])
-    data_tst <- data[boot_idx$tst_idx,]
-    ns <- dim(data_tst)[1]
-    label_tst <- label_da[boot_idx$tst_idx,]
-    ccr_cv <- matrix(0, lv, 1)
+      print(i)        
+      while (TRUE) {
+            boot_idx <- boots(rep_idx)
+            data_trn <- data[boot_idx$trn_idx,]
+            label_trn <- label[boot_idx$trn_idx,]
+            if (length(unique(label_trn)) == length(unique(label))) break
+      }     
+      rep_trn <- as.matrix(rep_idx[boot_idx$trn_idx,])
+      data_tst <- data[boot_idx$tst_idx,]
+      ns <- dim(data_tst)[1]
+      label_tst <- label[boot_idx$tst_idx,]
+      ccr_cv <- matrix(0, lv, 1)
     
     for (ii in 1:lv) {
       cv_results <- plsda_crossval(data = data_trn, label = label_trn, rep_idx = rep_trn, lv = ii)
@@ -205,15 +221,14 @@ plsda_boots <- function(data, label, rep_idx, iter, lv, perm) {
     }
     
     opt_LV <- which(ccr_cv == max(ccr_cv))
+    if (length(opt_LV) > 1) opt_LV <- opt_LV[1]
 
     amean <- t(as.matrix(colMeans(data_trn)))
-    cmean <- t(as.matrix(colMeans(label_trn)))
     
-    data_trn <- t(apply(data_trn, 1, "-", amean))
-    label_trn <- t(apply(label_trn, 1, "-", cmean))
+    data_trn <- t(apply(data_trn, 1, "-", amean))   
     
     plsmodel <- plsda(data_trn, label_trn, lv = opt_LV)
-    pred <- plsdapred(data_tst, model = plsmodel, aMean = amean, cMean = cmean)
+    pred <- plsdapred(data_tst, model = plsmodel, label_known = label_tst, amean = amean)
     ccr_p[i] <- pred$ccr
     conf_mat[, , i] <- pred$conf_mat
     predictions[[i]] <- pred$predictions
@@ -222,7 +237,7 @@ plsda_boots <- function(data, label, rep_idx, iter, lv, perm) {
       perm_idx <- reps_perm(rep_trn)
       data_perm <- data_trn[perm_idx,]
       plsmodel_perm <- plsda(data_perm, label_trn, lv = opt_LV)
-      pred_perm <- plsdapred(data_tst, model = plsmodel_perm, aMean = amean, cMean = cmean)
+      pred_perm <- plsdapred(data_tst, model = plsmodel_perm, label_known = label_tst, amean = amean)
       ccr_perm[i] <- pred_perm$ccr
       conf_mat_perm[, , i] <- pred_perm$conf_mat
     }
@@ -307,52 +322,54 @@ plsr_crossval <- function(data, label, rep_idx = NULL, lv = NULL, k = NULL) {
 
 plsda_crossval <- function(data, label, rep_idx = NULL, lv = NULL, k = NULL) {
     if (is.null(lv)) lv <- min(dim(data))
+    label <- as.matrix(label)
     unique_rep <- unique(rep_idx)
-    if (is.null(k)) {
-        if (length(unique_rep) < 14) k <- 1 else k <- 7
-        }
     ns <- length(unique_rep)
-    step <- round(ns / k)
-    predCval <- matrix(0, dim(label)[1], dim(label)[2])
-    nvY <- dim(label)[2]
+
+    if (is.null(k)) {
+        if (length(unique_rep) < 14) k <- ns else k <- 7
+    }    
+    step <- round(ns / k)    
     nsY <- dim(label)[1]
-    if (length(nvY) == 1) {
-        unique_class = unique(label)
+    nvY <- dim(label)[2]
+    predLabel <- matrix(0, nsY, 1)
+
+    if (nvY > 1) {
+        label_da <- label
+        label <- matrix(0, nsY, 1)
+        nc <- dim(label_da)[2]
+        label <- as.matrix(apply(matrix(as.logical(label_da), nsY, nvY), 1, "which"))
+    } else {
+        unique_class <- unique(label)
         nc <- length(unique_class)
         label_da <- matrix(0, nsY, nc)
-        for (i in 1:length(unique_class))
-            label_da[label == unique_class[i], i] = 1
-        } 
-    else {
-      label_da <- label
-      label <- matrix(0, ns, 1)
-      nc <- dim(label_da)[2]
-      for (i in 1:ns)
-        label[i] <- which(label_da[i,] == max(label_da[i,]))
+        label_new <- matrix(0, nsY,1)
+        for (i in 1:nc) {
+            label_da[label == unique_class[i], i] <- 1
+            label_new[label == unique_class[i],] <- i
+        }
+        label <- label_new
+        rm(label_new)
     }
     for (i in seq(1, ns, by = step)) {
-      rep_val <- unique_rep[i:min(c(ii + step - 1, ns))]
-      val_idx <- which(!is.na(match(rep_idx, rep_val)))
-      data_val <- data[val_idx,]
-      label_val <- label[val_idx,]
-      data_trn <- data[-val_idx,]
-      label_trn <- label_da[-val_idx,]
-      amean <- t(as.matrix(colMeans(data_trn)))
-      cmean <- t(as.matrix(colMeans(label_trn)))
-      data_trn <- t(apply(data_trn, 1, "-", amean))
-      label_trn <- t(apply(label_trn, 1, "-", cmean))
-      plsmodel <- pls(data_trn, label_trn, lv = lv)
-      predC <- plspred(data_val, label_val, aMean = amean, cMean = cmean)
-      predCval[val_idx,] <- predC
+        rep_val <- unique_rep[i:min(c(i + step - 1, ns))]
+        val_idx <- which(!is.na(match(rep_idx, rep_val)))
+        data_val <- data[val_idx,]
+        label_val <- as.matrix(label_da[val_idx,])
+        data_trn <- data[-val_idx,]
+        label_trn <- as.matrix(label_da[-val_idx,])
+        amean <- t(as.matrix(colMeans(data_trn)))        
+        data_trn <- t(apply(data_trn, 1, "-", amean))        
+        plsmodel <- plsda(data_trn, label_trn, lv = lv)
+        predC <- plsdapred(data_val, model = plsmodel, amean = amean)
+        predLabel[val_idx,] <- predC$label_predict
     }
-    predLabel <- matrix(0, ns, 1)
-    for (i in 1:ns)
-        predLabel[i] <- which(predCval[i,] == max(predCval[i,]))
+
     ccr <- length(which(predLabel == label)) / length(label)
     conf_mat <- matrix(0, nc, nc)
     for (i in 1:nc) {
         for (ii in 1:nc) {
-            conf_mat[i, ii] <- length(which(label == i && predLabel == ii)) / length(which(label == i))
+            conf_mat[i, ii] <- length(which(label == i & predLabel == ii)) / length(which(label == i))
         }
     }
     results <- list(ccr = ccr, conf_mat = conf_mat, predictions = predLabel)
@@ -413,6 +430,7 @@ plspred <- function(data = NULL, model = NULL, aMean = NULL, cMean = NULL, ascal
 }
 
 plsda <- function(data = NULL, label = NULL, lv = NULL) {
+    label <- as.matrix(label)
     ns <- dim(label)[1]
     nvY <- dim(label)[2]
     if (nvY == 1) {
@@ -420,8 +438,10 @@ plsda <- function(data = NULL, label = NULL, lv = NULL) {
         no_class <- length(unique_label)
         label_new <- matrix(0, ns, no_class)
         for (i in 1:no_class) {
-            label_new[label == unique(label[i]), i] <- 1
+            label_new[label == unique_label[i], i] <- 1
         }
+    } else {
+        label_new <- label
     }
     results <- pls(data, label_new, lv)
     return(results)
@@ -429,13 +449,14 @@ plsda <- function(data = NULL, label = NULL, lv = NULL) {
 
 plsdapred <- function(data = NULL, model = NULL, label_known = NULL, amean = NULL, ascale = NULL, cmean = NULL, cscale = NULL) {
     raw_predict <- plspred(data, model, amean, ascale, cmean, cscale)
-    ns <- dim(raw_predict$pred)[1]
-    nYv <- dim(raw_predict$pred)[2]
-    label_predict <- matrix(0, ns, 1)
-    results <- list(label_predict = label_predict, ccr = NULL, conf_mat = NULL)
+    raw_pred <- raw_predict$pred
+    ns <- dim(raw_pred)[1]
+    nYv <- dim(raw_pred)[2]
+    label_predict <- matrix(0, ns, 1)    
     for (i in 1:ns) {
-        label_predict[i] <- which(raw_predict[i,] == max(raw_predict[i,]))
+        label_predict[i] <- which(raw_pred[i,] == max(raw_pred[i,]))
     }
+    results <- list(label_predict = label_predict, ccr = NULL, conf_mat = NULL)
     if (!is.null(label_known)) {
         ccr <- length(which(label_predict == label_known)) / length(label_known)
         conf_mat <- matrix(0, nYv, nYv)
@@ -447,7 +468,7 @@ plsdapred <- function(data = NULL, model = NULL, label_known = NULL, amean = NUL
         results$ccr <- ccr
         results$conf_mat <- conf_mat
     }
-    return(resutls)
+    return(results)
 }
 
 
