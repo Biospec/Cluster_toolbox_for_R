@@ -1,3 +1,5 @@
+library(pracma)
+
 pcdfa <- function(x, label = NULL, no_pc = 10, maxfac = NULL) {
     if (is.null(label))
         label <- row.names(x)
@@ -52,14 +54,8 @@ pcdfa_pred <- function(x, model = NULL) {
     return(prediction)
 }
 
-plsboots <- function(data = NULL, label = NULL, rep_idx = NULL, iter = 1000, lv = NULL, type = "r", perm = FALSE) {
-    if (is.null(rep_idx)) rep_idx <- 1:dim(data)[1]
-    switch(type,
-        r = plsr_boots(data, label, rep_idx, iter, lv, perm),
-        d = plsda_boots(data, label, rep_idx, iter, lv), perms)
-}
 
-plsr_boots <- function(data, label, rep_idx, iter, lv, perm) {
+plsr_boots <- function(data, label, rep_idx, iter = 1000, lv, perm) {
     if (is.null(lv)) {
         lv <- min(dim(data))
     }
@@ -270,7 +266,79 @@ reps_perm <- function(reps = NULL) {
     return(perm_idx)
 }
 
-plsr_crossval <- function(data, label, rep_idx = NULL, lv = NULL, k = NULL) {
+plsr_dblcv <- function(data = NULL, label = NULL, rep_idx = NULL, lv = NULL, k = NULL ) {
+  label <- as.matrix(label)
+  data <- as.matrix(data)
+  ns <- dim(data)[1]
+  nv <- dim(data)[2]
+  nvY <- dim(label)[2]
+  if (is.null(rep_idx)) rep_idx <- 1:ns
+  unique_rep <- unique(rep_idx)
+  nr <- length(unique_rep)
+  if (nvY > 1) {
+    rmsecv <- matrix(0, nvY, 1)
+    Q2 <- matrix(0, nvY, 1)
+  }
+  
+  if (is.null(lv)) lv <- min(dim(data))
+  
+  if (is.null(k)) {
+    if (nr < 14) k <- nr else k <- 7
+  }
+  
+  step <- round(nr / k)
+  predCV <- matrix(0, ns, nvY)
+  for (i in seq(1, nr, by = step)){
+    rep_cv <- unique_rep[i:min(c(i + step - 1, nr))]
+    nr_cv <- length(rep_cv)
+    cv_idx <- which(!is.na(match(rep_idx, rep_cv)))
+    data_cv <- data[cv_idx, ]
+    data_trn <- data[-cv_idx, ]
+    label_trn <- as.matrix(label[-cv_idx, ])
+    rep_trn <- rep_idx[-cv_idx]
+    
+    amean <- colMeans(data_trn)
+    data_trn <- data_trn - t(matrix(as.matrix(amean), dim(data_trn)[2], dim(data_trn)[1]))
+    if (nvY >1) {
+      cmean <- colMeans(label-trn)
+      label_trn <- label_trn - t(matrix(as.matrix(cmean)), dim(label_trn)[2], dim(label_trn)[1])
+    }
+    else {
+      cmean <- mean(label_trn)
+      label_trn <- as.matrix(label_trn - cmean)
+    }
+    rmsecv_inner <- matrix(0, lv, 1)
+    for (ii in 1:lv) {
+      cv_results <- plsr_crossval(data_trn, label_trn, rep_trn, lv = ii)
+      if (nvY > 1) 
+        rmsecv_inner[ii] <- mean(cv_results$rmsecv)
+      else
+        rmsecv_inner[ii] <- cv_results$rmsecv
+    }
+    opt_LV = which(rmsecv == min(rmsecv_inner))
+    if (length(opt_LV) > 1) opt_LV <- opt_LV[1]
+    plsmodel <- pls(data_trn, label_trn, lv = lv)
+    predC <- plspred(data_cv, plsmodel, aMean = amean, cMean = cmean)
+    predCV[cv_idx, ] <- predC$pred
+  }
+  
+  if (nvY == 1) {
+    rmsecv <- sqrt(sum((label - predCV) ^ 2) / ns)
+    Q2 <- 1 - sum((label - predCval) ^ 2) / sum((label - mean(label)) ^ 2)
+  } else {
+    for (ii in 1:nvY) {
+      rmsecv[ii] <- sqrt(sum((label[, ii] - predCval[, ii]) ^ 2) / ns)
+      Q2[ii] <- 1 - sum((label[, ii] - predCval[,ii]) ^ 2) / sum((label[, ii] - mean(label[, ii])) ^ 2)
+    }
+  }
+  
+  results <- list(predictions = predCV, rmsecv = rmsecv, Q2 = Q2)
+  return(results)
+  
+}
+
+
+plsr_crossval <- function(data, label, rep_idx, lv = NULL, k = NULL) {
     label <- as.matrix(label)
     nvY <- dim(label)[2]
     rep_idx <- as.matrix(rep_idx)
@@ -285,7 +353,7 @@ plsr_crossval <- function(data, label, rep_idx = NULL, lv = NULL, k = NULL) {
     
     if (is.null(k)) {
         if (length(unique_rep) < 14) k <- ns else k <- 7
-        }    
+    }    
     step <- round(ns / k)
     predCval <- matrix(0, dim(label)[1], dim(label)[2])
     for (i in seq(1, ns, by = step)) {
@@ -295,13 +363,12 @@ plsr_crossval <- function(data, label, rep_idx = NULL, lv = NULL, k = NULL) {
         label_val <- as.matrix(label[val_idx,])
         data_trn <- data[-val_idx,]
         label_trn <- as.matrix(label[-val_idx,])
-        amean <- t(as.matrix(colMeans(data_trn)))
-        cmean <- t(as.matrix(colMeans(label_trn)))
-        data_trn <- t(apply(data_trn, 1, "-", amean))
-        if (nvY > 1)
-            label_trn <- t(apply(label_trn, 1, "-", cmean))
+        amean <- colMeans(data_trn)
+        data_trn <- data_trn - t(matrix(as.matrix(amean), dim(data_trn)[2], dim(data_trn)[1]))
+        if (nvY >1)
+          label_trn <- label_trn - t(matrix(as.matrix(cmean)), dim(label_trn)[2], dim(label_trn)[1])
         else
-            label_trn <- as.matrix(apply(label_trn, 1, "-", cmean))
+          label_trn <- as.matrix(label_trn - mean(label_trn))
         plsmodel <- pls(data_trn, label_trn, lv = lv)
         predC <- plspred(data_val, plsmodel, aMean = amean, cMean = cmean)
         predCval[val_idx,] <- predC$pred
@@ -318,6 +385,73 @@ plsr_crossval <- function(data, label, rep_idx = NULL, lv = NULL, k = NULL) {
       
     results <- list(predictions = predCval, rmsecv = rmsecv, Q2 = Q2)
     return(results)
+}
+
+plsda_dblcv <- function(data, label, rep_idx = NULL, lv = NULL, k = NULL ){
+  label <- as.matrix(label)
+  data <- as.matrix(data)
+  ns <- dim(data)[1]
+  nv <- dim(data)[2]
+  nvY <- dim(label)[2]
+  predLabel <- matrix(0, ns, 1)
+  
+  if (is.null(rep_idx)) rep_idx <- 1:ns
+  unique_rep <- unique(rep_idx)
+  nr <- length(unique_rep)
+  
+  if (is.null(lv)) lv <- min(dim(data))
+  
+  if (is.null(k)) {
+    if (nr < 14) k <- nr else k <- 7
+  }
+  
+  step <- round(nr / k)
+  
+  if (nvY > 1) {
+    label_da <- label
+    label <- matrix(0, nsY, 1)
+    nc <- dim(label_da)[2]
+    label <- as.matrix(apply(matrix(as.logical(label_da), nsY, nvY), 1, "which"))
+  } 
+  else{
+    unique_class <- unique(label)
+    nc <- length(unique_class)
+    label_da <- matrix(0, nsY, nc)
+    label_new <- matrix(0, nsY,1)
+    for (i in 1:nc) {
+      label_da[label == unique_class[i], i] <- 1
+      label_new[label == unique_class[i],] <- i
+    }
+    label <- label_new
+    rm(label_new) 
+  }
+  
+  for (i in seq(1, nr, by = step)) {
+    rep_cv <- unique_rep[i:min(c(i + step - 1, nr))]
+    cv_idx <- which(!is.na(match(rep_idx, rep_cv)))
+    rep_trn <- rep_idx[-cv_idx]
+    data_cv <- data[cv_idx, ]
+    data_trn <- data[-cv_idx, ]
+    label_trn <- as.matrix(label_da[-cv_idx, ])
+    amean <- colMeans(data_trn)
+    data_trn <- data_trn - t(matrix(as.matrix(amean), dim(data_trn)[2], dim(data_trn)[1]))
+    for (ii in 1:lv) {
+      cv_results <- plsda_crossval(data_trn, label_trn, rep_trn, lv = ii)
+      ccr[ii] <- cv_results$ccr
+    }
+    opt_LV <- which(ccr == max(ccr))
+    if (length(opt_LV) > 1) opt_LV <- opt_LV[1]
+    predC <- plsdapred(data_val, model = plsmodel, amean = amean)
+    predLabel[cv_idx,] <- predC$label_predict
+  }
+  ccr <- length(which(predLabel == label)) / length(label)
+  conf_mat <- matrix(0, nc, nc)
+  for (i in 1:nc) {
+    for (ii in 1:nc) {
+      conf_mat[i, ii] <- length(which(label == i & predLabel == ii)) / length(which(label == i))
+    }
+  }
+  results <- list(ccr = ccr, conf_mat = conf_mat, predictions = predLabel)
 }
 
 plsda_crossval <- function(data, label, rep_idx = NULL, lv = NULL, k = NULL) {
@@ -474,7 +608,6 @@ plsdapred <- function(data = NULL, model = NULL, label_known = NULL, amean = NUL
 
 
 boots <- function(rep_idx = NULL) {
-    library(pracma)
     rep_idx <- as.matrix(rep_idx)
     ns <- length(rep_idx)
     unique_rep <- unique(rep_idx)
