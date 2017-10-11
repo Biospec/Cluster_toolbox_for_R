@@ -1,15 +1,45 @@
 library(RSpectra)
 library(MASS)
 
+auto_sc <- function(data = NULL) {
+  ns <- dim(data)[1]
+  nv <- dim(data)[2]
+  data_sd <- apply(data, 2, sd)
+  null_var <- NULL
+  if (any(data_sd == 0))
+    null_var <- which(data_sd == 0)
+  data_sd <- t(matrix(as.matrix(data_sd), nv, ns))
+  data_mean <- t(matrix(as.matrix(colMeans(data)), nv, ns))
+  results <- (data - data_mean) / data_sd
+  if (!is.null(null_var)) 
+    results[, null_var] <- 0
+  return(results)
+}
 
-cpca <- function(data = NULL, Xin = NULL, nPC = NULL, tol = 1e-8){
-  maxiter <- 5000
-  data_mean <- colMeans((data))
-  data <- data - t(matrix(as.matrix(data_mean), nv, ns))
+blk_sc <- function(data = NULL) {
+  nv <- dim(data)[2]
+  scaling_factor <- 1 / sqrt(nv - 1)
+  data_scale <- auto_sc(data)
+  data_scale <- data_scale * scaling_factor
+  return(data_scale)
+}
   
+cpca <- function(data = NULL, Xin = NULL, nPC = NULL, xscale = TRUE, tol = 1e-8){
+  maxiter <- 500
+  data <- as.matrix(data)
   ns <- dim(data)[1]
   nv <- dim(data)[2]
   nb <- dim(Xin)[1]
+  data_mean <- colMeans((data))
+  data <- data - t(matrix(as.matrix(data_mean), nv, ns))
+
+  if (xscale) {
+    for (i in 1:nb){
+      rowi <- Xin[i,1]:Xin[i,2]
+      data_scale <- blk_sc(data[, rowi])
+      data[, rowi] <- data_scale
+    }
+  }
   maxPC <- max(nPC)
   Tb <- matrix(0, ns, maxPC * nb)
   Pb <- matrix(0, nv, maxPC)
@@ -26,7 +56,7 @@ cpca <- function(data = NULL, Xin = NULL, nPC = NULL, tol = 1e-8){
   
   for (i in 1:nb){
     rowi <- Xin[i,1]:Xin[i,2]
-    ssqX[i+1] <- sum(colMeans(data[,rowi]^2))
+    ssqX[i+1] <- sum(colSums(data[,rowi]^2))
   }
   
   eigval <- eigs(data %*% t(data), maxPC)
@@ -36,31 +66,31 @@ cpca <- function(data = NULL, Xin = NULL, nPC = NULL, tol = 1e-8){
     iter <- 0
     Tt[, i] <- v[, i]
     t_old <- Tt[,i] * 100
-    while ( sum((t_old - Tt[,a])^2) > tol & iter < maxiter){
+    while ( sum((t_old - Tt[,i])^2) > tol & iter < maxiter){
       iter <- iter + 1
       t_old <- Tt[, i]
       for (ii in 1:nb) {
         if (nPC[ii] >= i) {
           rowi <- Xin[ii,1]:Xin[ii,2]
           coli <- (i-1) * nb + ii
-          Pb[rowi, i] <- t(data[, rowi]) %*% Tt[, i] / sum(Tt[,a]^2)
+          Pb[rowi, i] <- t(data[, rowi]) %*% Tt[, i] / sum(Tt[,i]^2)
           Pb[rowi, i] <- Pb[rowi, i] / sqrt(sum(Pb[rowi,i]^2))
-          Tb[, coli] <- X[, rowi] %*% Pb[rowi, i] / sum(Pb[rowi, i]^2)
+          Tb[, coli] <- data[, rowi] %*% Pb[rowi, i] / sum(Pb[rowi, i]^2)
         }
       }
       index <- ((i - 1) * nb + 1) : (i*nb)
       Wt[, i] <- t(Tb[, index]) %*% Tt[, i] / sum(Tt[, i]^2)
-      Wt[, i] <- Wt[, i] / sqrt(sum(Wt[, a]^2))
-      Tt[, i] <- Tb[, index] %*% Wt[, a] / sqrt(sum(Wt[, i]^2))
+      Wt[, i] <- Wt[, i] / sqrt(sum(Wt[, i]^2))
+      Tt[, i] <- Tb[, index] %*% Wt[, i] / sum(Wt[, i]^2)
     }
   
     if (iter == maxiter) 
       print("Warning: maximum number of iterations reached before convergence")
     for (ii in 1:nb){
-      if (nPC(ii) >= i){
+      if (nPC[ii] >= i){
         rowi <- Xin[ii,1] : Xin[ii, 2]
         Pb[rowi, i] <- t(data[, rowi]) %*% Tt[, i] / sum(Tt[, i]^2)
-        data[, rowi] <- X[, rowi] - Tt[, i] %*% t(Pb[rowi, i])
+        data[, rowi] <- data[, rowi] - Tt[, i] %*% t(Pb[rowi, i])
       }
     }
     
@@ -69,10 +99,10 @@ cpca <- function(data = NULL, Xin = NULL, nPC = NULL, tol = 1e-8){
     for (ii in 1:nb) {
       rowi <- Xin[ii,1] : Xin[ii, 2]
       coli <- (i-1)*nb + ii
-      ssq[i, ii + 1] <- (ssqX[ii + 1] - sum(colSums(X[, rowi]^2))) / ssqX[ii + 1]
+      ssq[i, ii + 1] <- (ssqX[ii + 1] - sum(colSums(data[, rowi]^2))) / ssqX[ii + 1]
       Rbo[, coli] <- sqrt(rowSums(data[, rowi]^2))
       index <- seq(from = ii, to = (i-1)*nb + ii, by = nb)
-      Lbo[, coli] <- diag(Tb[, index] %*% ginv(t(Tb[, index]) %*% Tb[, index]) %*% Tb[, index])
+      Lbo[, coli] <- diag(Tb[, index] %*% ginv(t(Tb[, index]) %*% Tb[, index]) %*% t(Tb[, index]))
     }
     Rbv[, i] <- as.matrix(sqrt(colSums(data^2)))
     Lbv[, i] <- diag(Pb[, 1:i] %*% t(Pb[, 1:i]))
@@ -84,25 +114,35 @@ cpca <- function(data = NULL, Xin = NULL, nPC = NULL, tol = 1e-8){
   return(results)
 }
 
-hpca <- function(data = NULL, Xin = NULL, nPC = NULL, tol = 1e-8){
-  maxiter <- 5000
-  data_mean <- colMeans((data))
-  data <- data - t(matrix(as.matrix(data_mean), nv, ns))
-  
+hpca <- function(data = NULL, Xin = NULL, nPC = NULL, xscale = TRUE, tol = 1e-8){
+  maxiter <- 500
   ns <- dim(data)[1]
   nv <- dim(data)[2]
   nb <- dim(Xin)[1]
   maxPC <- max(nPC)
+  
+  data <- as.matrix(data)
+  data_mean <- colMeans((data))
+  data <- data - t(matrix(as.matrix(data_mean), nv, ns))
+  
+  if (xscale) {
+    for (i in 1:nb){
+      rowi <- Xin[i,1]:Xin[i,2]
+      data_scale <- blk_sc(data[, rowi])
+      data[, rowi] <- data_scale
+    }
+  }
+
   
   Tb <- matrix(0, ns, maxPC * nb)
   Pb <- matrix(0, nv, maxPC)
   Wt <- matrix(0, nb, maxPC)
   Tt <- matrix(0, ns, maxPC)
   ssq <- matrix(0, maxPC, 1 + nb)
-  Rbo <- matrix(0, maxPC * nb)
+  Rbo <- matrix(0, ns, maxPC * nb)
   Rbv <- matrix(0, nv, maxPC)
-  Lbo <- matrix(0, maxPC * nb)
-  Lbv <- matrix(0, maxPC)
+  Lbo <- matrix(0, ns, maxPC * nb)
+  Lbv <- matrix(0, nv, maxPC)
   Lto <- matrix(0, ns, maxPC)
   ssqX <- matrix(0, nb + 1, 1)
   ssqX[1] <- sum(colSums(data^2))
@@ -121,7 +161,7 @@ hpca <- function(data = NULL, Xin = NULL, nPC = NULL, tol = 1e-8){
     
     while ((sum((t_old - Tt[, i])^2) > tol) & (iter < maxiter)) {
       iter = iter + 1
-      t_old <- Tt[, a]
+      t_old <- Tt[, i]
       for (ii in 1:nb){
         if (nPC[ii] >= i){
           rowi <- Xin[ii, 1] : Xin[ii, 2]
@@ -148,7 +188,7 @@ hpca <- function(data = NULL, Xin = NULL, nPC = NULL, tol = 1e-8){
     for (ii in 1:nb){
       rowi <- Xin[ii, 1] : Xin[ii, 2]
       coli <- (i-1) * nb + ii
-      ssq[i, ii + 1] <- (ssqX[ii + 1] - sum(colSums(data[, rowi]^2))) / ssqX(ii + 1)
+      ssq[i, ii + 1] <- (ssqX[ii + 1] - sum(colSums(data[, rowi]^2))) / ssqX[ii + 1]
       Rbo[, coli] <- sqrt(sum(rowMeans(data[, rowi]^2)))
       index <- seq(from = ii, to = (i - 1) * nb + ii, by = nb)
       Lbo[, coli] <- diag(Tb[, index] %*% ginv(t(Tb[, index]) %*% Tb[, index]) %*% t(Tb[, index]))
@@ -272,7 +312,7 @@ mbpls <- function(data = NULL, label = NULL, nPC = NULL,  Xin = NULL, Yin = NULL
 
 mbpls_pred <- function(data = NULL, amean = NULL, model = NULL) {
   if (!is.null(amean))
-    data <- data - t(matrix(as.matrix(colMeans(data)), nv, ns))
+    data <- data - t(matrix(as.matrix(amean), nv, ns))
   results <- data %*% model$YRegCoeff
   return(results)
 }
