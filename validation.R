@@ -176,15 +176,6 @@ modeltune <- function(train_fun = NULL, pred_fun = NULL, eval_type = "R",
     }
   }
     
-  if (is.null(rep_idx)) 
-    rep_idx <- 1:ns
-  if (eval_type == 'R') {
-    r2cv <- matrix(0, no_trials, nvY)
-    rmsep_cv <- matrix(0, no_trials, nvY)
-  } else {
-    ccr <- matrix(0, k, 1)
-    clsstats <- list()
-  }
   no_parameters <- length(model_parameters)
   if (no_parameters > 1) {
     parameter_grid <- expand.grid(model_parameters)
@@ -194,8 +185,21 @@ modeltune <- function(train_fun = NULL, pred_fun = NULL, eval_type = "R",
     parameter_grid <- model_parameters
     no_trials <- length(parameter_grid[[1]])
   }
+  
+  if (is.null(rep_idx)) 
+    rep_idx <- 1:ns
+  
+  if (eval_type == 'R') {
+    r2cv <- matrix(0, no_trials, nvY)
+    rmsep_cv <- matrix(0, no_trials, nvY)
+  } else {
+    ccr <- matrix(0, k, 1)
+    clsstats <- list()
+  }
+  
   cv_idx <- crossval(rep_idx, k, cv_perm)
   no_loops <- length(cv_idx$trn_idx)
+  
   for (i in 1:no_trials){
     y_pred_cv <- matrix(0, ns, nvY)
     y_known_cv <- matrix(0, ns, nvY)
