@@ -74,6 +74,7 @@ modelvalidation <- function(train_fun = NULL, pred_fun = NULL, eval_type = 'R',
   
   if (resample_method == 'boots'){
     if (eval_type == 'R') {
+      msep_boots <- matrix(0, k, nvY)
       rmsep_boots <- matrix(0, k, nvY)
       r2p_boots <- matrix(0, k, nvY)
     } else {
@@ -85,21 +86,29 @@ modelvalidation <- function(train_fun = NULL, pred_fun = NULL, eval_type = 'R',
     for (i in 1:k){
       trn_idx <- boots_idx$trn_idx[[i]]
       tst_idx <- boots_idx$tst_idx[[i]]
+      ns_tst <- length(tst_idx)
       opt_model <- modeltune(train_fun, pred_fun, eval_type, 
                                   k, X[trn_idx,], Y[trn_idx,], rep_idx[trn_idx,], 
                                   model_parameters = model_parameters)
       opt_parameters <- opt_model$opt_parameters
-      model <- do.call(train_fun, c(X[trn_idx,], Y[trn_idx,], opt_parameters))
+      model <- do.call(train_fun, c(list(X[trn_idx,], Y[trn_idx,]), opt_parameters))
       pred <- pred_fun(model, X[tst_idx,])
       
       if (eval_type == 'R') {
-        y_known <- Y[boots_idx$tst_idx,]
-        y_predict <- pred
-        msep_boots[i,] <- sum((y_pred - y_known)^2)
-        r2p_boots[i,] <- rmsep^2 / sum((y_known - colMeans(y_known))^2) 
-        rmsep_boots <- sqrt(msep_boots)
+        if (nvY>1) {
+          y_known <- Y[tst_idx,]
+          y_predict <- pred
+          msep_boots[i,] <- sum((y_predict - y_known)^2) / ns_tst
+          r2p_boots[i,] <- msep_boots[i,] / (sum((y_known - colMeans(y_known))^2) / ns_tst)
+          rmsep_boots[i,] <- sqrt(msep_boots[i,])}
+        else {
+          y_known <- Y[tst_idx]
+          y_predict <- pred
+          msep_boots[i] <- sum((y_predict - y_known)^2) / ns_tst
+          r2p_boots[i] <- 1 - msep_boots[i] / sum((y_known - mean(y_known))^2 / ns_tst)
+          rmsep_boots[i] <- sqrt(msep_boots[i])}
       } else{
-        y_known <- Y[boots_idx$tst_idx,]
+        y_known <- Y[tst_idx,]
         y_predict <- pred
         ccr[i] <- length(which(y_predict == y_known))/length(y_known)
         confmat <- c(confmat, confusionMatrix(y_predict, y_known))
@@ -107,9 +116,9 @@ modelvalidation <- function(train_fun = NULL, pred_fun = NULL, eval_type = 'R',
     }
     
     if (eval_type == 'R') 
-      results <- c(RMSEP = rmsep_boots, R2P = r2p_boots)
+      results <- list(RMSEP = rmsep_boots, R2P = r2p_boots)
     else
-      results <- c(CCR = ccr, ConfMat = confmat)
+      results <- list(CCR = ccr, ConfMat = confmat)
   }
   else if (resample_method == 'crossval'){
     cv_idx <- crossval(rep_idx, k, cv_perm)
@@ -126,18 +135,24 @@ modelvalidation <- function(train_fun = NULL, pred_fun = NULL, eval_type = 'R',
     }
     
     if (eval_type == 'R'){
-      msep_cv <- sum((y_pred_cv - y_known_cv)^2) / ns
-      r2cv <- msep_cv / sum((y_knwon - colMeans(y_known_cv))^2)
-      rmsep_cv <- sqrt(msep_cv)
+      if (nvY > 1) {
+        msep_cv <- sum((y_pred_cv - y_known_cv)^2) / ns
+        r2cv <- msep_cv / (sum((y_pred_cv - colMeans(y_known_cv))^2) / ns)
+        rmsep_cv <- sqrt(msep_cv)}
+      else {
+        msep_cv <- sum((y_pred_cv - y_known_cv)^2) / ns
+        r2cv <- msep_cv / (sum((y_known_cv - mean(y_known_cv))^2) / ns)
+        rmsep_cv <- sqrt(msep_cv)
+      }
     } else {
       ccr <- length(which(y_pred_cv == y_known_cv))/length(y_known_cv)
       confmat <- confusionMatrix(y_pred_cv, y_known_cv)
     }
     
     if (eval_type == 'R')
-      results <- c(RMSEP = rmsep_cv, R2P = r2cv)
+      results <- list(RMSEP = rmsep_cv, R2P = r2cv)
     else
-      results <- c(CCR = ccr, ConfMat = confmat)
+      results <- list(CCR = ccr, ConfMat = confmat)
   } else 
     stop("The resample_method can only be either boots or crossval")
   return(results)
