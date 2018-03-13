@@ -126,9 +126,13 @@ modelvalidation <- function(train_fun = NULL, pred_fun = NULL, eval_type = 'R',
     y_known_cv <- matrix(0, ns, nvY)
     no_loops <- length(cv_idx$trn_idx)
     for (i in 1:no_loops){
-      trn_idx <- cv_idx$trn_idx[[i]]
-      tst_idx <- cv_idx$tst_idx[[i]]
-      model <- train_fun(X[trn_idx,], Y[trn_idx,],...)
+      trn_idx <- unlist(cv_idx$trn_idx[[i]])
+      tst_idx <- unlist(cv_idx$tst_idx[[i]])
+      opt_model <- modeltune(train_fun, pred_fun, eval_type, 
+                             k, X[trn_idx,], Y[trn_idx,], rep_idx[trn_idx,], 
+                             model_parameters = model_parameters)
+      opt_parameters <- opt_model$opt_parameters
+      model <- do.call(train_fun, c(list(X[trn_idx,], Y[trn_idx,]), opt_parameters))
       pred <- pred_fun(model, X[tst_idx,])
       y_known_cv[tst_idx,] <- Y[tst_idx,]
       y_pred_cv[tst_idx,] <- pred
@@ -141,7 +145,7 @@ modelvalidation <- function(train_fun = NULL, pred_fun = NULL, eval_type = 'R',
         rmsep_cv <- sqrt(msep_cv)}
       else {
         msep_cv <- sum((y_pred_cv - y_known_cv)^2) / ns
-        r2cv <- msep_cv / (sum((y_known_cv - mean(y_known_cv))^2) / ns)
+        r2cv <- 1 -  msep_cv / (sum((y_known_cv - mean(y_known_cv))^2) / ns)
         rmsep_cv <- sqrt(msep_cv)
       }
     } else {
