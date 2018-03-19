@@ -41,13 +41,14 @@ modelvalidation <- function(train_fun = NULL, pred_fun = NULL, eval_type = 'R',
                             resample_method = 'boots', k= 1000, X = NULL, 
                             Y = NULL, rep_idx = NULL, model_parameters = NULL, 
                             cv_perm = FALSE, perm_test = FALSE)
-{ X <- as.matrix(X)
+{ #X <- as.matrix(X)
   ns <- dim(X)[1]
 # Only handle numerical Y at the moment
 #  if (is.numeric(Y)){
-    Y <- as.matrix(Y)
-    nvY <- dim(Y)[2]
-    if (nvY > 1 & eval_type != 'R'){
+  if (is.vector(Y))
+    Y <- as.data.frame(Y)
+  nvY <- dim(Y)[2]
+  if (nvY > 1 & eval_type != 'R'){
       warning("Classification target Y appeared to be a matrix, convert it to vector by taking maximum on each row",
               immediate = TRUE)
       Ynew = matrix(0, ns, 1)
@@ -82,33 +83,48 @@ modelvalidation <- function(train_fun = NULL, pred_fun = NULL, eval_type = 'R',
       confmat <- list()
     }
     
-    boots_idx <- boots(rep_idx)
+    boots_idx <- boots(rep_idx, k)
     for (i in 1:k){
       trn_idx <- boots_idx$trn_idx[[i]]
       tst_idx <- boots_idx$tst_idx[[i]]
+      ns_trn <- length(trn_idx)
       ns_tst <- length(tst_idx)
+      nc_trn <- length(unique(Y[trn_idx,]))
+      if (ns_trn >= nc_trn*7)
+        k_tune <- 7
+      else
+        k_tune = ns_trn
       opt_model <- modeltune(train_fun, pred_fun, eval_type, 
-                                  k, X[trn_idx,], Y[trn_idx,], rep_idx[trn_idx,], 
+                                  k_tune, X[trn_idx,], Y[trn_idx,], rep_idx[trn_idx], 
                                   model_parameters = model_parameters)
       opt_parameters <- opt_model$opt_parameters
       model <- do.call(train_fun, c(list(X[trn_idx,], Y[trn_idx,]), opt_parameters))
-      pred <- pred_fun(model, X[tst_idx,])
+      pred <- pred_fun(model, X[tst_idx, , drop = FALSE])
       
       if (eval_type == 'R') {
-        if (nvY>1) {
-          y_known <- Y[tst_idx,]
-          y_predict <- pred
-          msep_boots[i,] <- sum((y_predict - y_known)^2) / ns_tst
-          r2p_boots[i,] <- msep_boots[i,] / (sum((y_known - colMeans(y_known))^2) / ns_tst)
-          rmsep_boots[i,] <- sqrt(msep_boots[i,])}
-        else {
-          y_known <- Y[tst_idx]
-          y_predict <- pred
-          msep_boots[i] <- sum((y_predict - y_known)^2) / ns_tst
-          r2p_boots[i] <- 1 - msep_boots[i] / sum((y_known - mean(y_known))^2 / ns_tst)
-          rmsep_boots[i] <- sqrt(msep_boots[i])}
+        y_known <- as.matrix(Y[tst_idx,])
+        y_predict <- as.matrix(pred)
+        msep_boots[i,] <- sum((y_predict - y_known)^2) / ns_tst
+        r2p_boots[i, ] <- 1 - msep_boots[i,] / (sum((y_known - colMeans(y_known))^2) / ns_tst)
+        rmsep_boots[i,] <- sqrt(msep_boots[i,])
+        # if (nvY>1) {
+        #   y_known <- Y[tst_idx,]
+        #   y_predict <- pred
+        #   msep_boots[i,] <- sum((y_predict - y_known)^2) / ns_tst
+        #   r2p_boots[i,] <- msep_boots[i,] / (sum((y_known - colMeans(y_known))^2) / ns_tst)
+        #   rmsep_boots[i,] <- sqrt(msep_boots[i,])}
+        # else {
+        #   y_known <- Y[tst_idx]
+        #   y_predict <- pred
+        #   msep_boots[i] <- sum((y_predict - y_known)^2) / ns_tst
+        #   r2p_boots[i] <- 1 - msep_boots[i] / sum((y_known - mean(y_known))^2 / ns_tst)
+        #   rmsep_boots[i] <- sqrt(msep_boots[i])
+        #   }
       } else{
-        y_known <- Y[tst_idx,]
+        if (is.character(Y))
+          y_known <- as.factor(Y[tst_idx,])
+        else
+          y_known <- Y[tst_idx,]
         y_predict <- pred
         ccr[i] <- length(which(y_predict == y_known))/length(y_known)
         confmat <- c(confmat, confusionMatrix(y_predict, y_known))
@@ -128,26 +144,36 @@ modelvalidation <- function(train_fun = NULL, pred_fun = NULL, eval_type = 'R',
     for (i in 1:no_loops){
       trn_idx <- unlist(cv_idx$trn_idx[[i]])
       tst_idx <- unlist(cv_idx$tst_idx[[i]])
+      nc_trn <- length(unique(Y[trn_idx,]))
+      if (ns_trn >= nc_trn*7)
+        k_tune <- 7
+      else
+        k_tune = ns_trn
       opt_model <- modeltune(train_fun, pred_fun, eval_type, 
-                             k, X[trn_idx,], Y[trn_idx,], rep_idx[trn_idx,], 
+                             k_tune, X[trn_idx,], Y[trn_idx,], rep_idx[trn_idx], 
                              model_parameters = model_parameters)
       opt_parameters <- opt_model$opt_parameters
       model <- do.call(train_fun, c(list(X[trn_idx,], Y[trn_idx,]), opt_parameters))
-      pred <- pred_fun(model, X[tst_idx,])
+      pred <- pred_fun(model, X[tst_idx, , drop = FALSE])
       y_known_cv[tst_idx,] <- Y[tst_idx,]
       y_pred_cv[tst_idx,] <- pred
     }
     
     if (eval_type == 'R'){
-      if (nvY > 1) {
-        msep_cv <- sum((y_pred_cv - y_known_cv)^2) / ns
-        r2cv <- msep_cv / (sum((y_pred_cv - colMeans(y_known_cv))^2) / ns)
-        rmsep_cv <- sqrt(msep_cv)}
-      else {
-        msep_cv <- sum((y_pred_cv - y_known_cv)^2) / ns
-        r2cv <- 1 -  msep_cv / (sum((y_known_cv - mean(y_known_cv))^2) / ns)
-        rmsep_cv <- sqrt(msep_cv)
-      }
+      y_pred_cv <- as.matrix(y_pred_cv)
+      y_known_cv <- as.matrix(y_known_cv)
+      msep_cv <- sum((y_pred_cv - y_known_cv)^2) / ns
+      r2cv <- 1 - msep_cv / (sum((y_pred_cv - colMeans(y_known_cv))^2) / ns)
+      rmsep_cv <- sqrt(msep_cv)
+      # if (nvY > 1) {
+      #   msep_cv <- sum((y_pred_cv - y_known_cv)^2) / ns
+      #   r2cv <- msep_cv / (sum((y_pred_cv - colMeans(y_known_cv))^2) / ns)
+      #   rmsep_cv <- sqrt(msep_cv)}
+      # else {
+      #   msep_cv <- sum((y_pred_cv - y_known_cv)^2) / ns
+      #   r2cv <- 1 -  msep_cv / (sum((y_known_cv - mean(y_known_cv))^2) / ns)
+      #   rmsep_cv <- sqrt(msep_cv)
+      # }
     } else {
       ccr <- length(which(y_pred_cv == y_known_cv))/length(y_known_cv)
       confmat <- confusionMatrix(y_pred_cv, y_known_cv)
@@ -171,10 +197,10 @@ modeltune <- function(train_fun = NULL, pred_fun = NULL, eval_type = "R",
   ns <- dim(X)[1]
 # Only handle numerical Y at the moment  
 #  if (is.numeric(Y) | is.data.frame(Y)){
-    Y <- as.matrix(Y)
+  Y <- as.matrix(Y)
     nvY <- dim(Y)[2]
     if (nvY > 1 & eval_type != 'R'){
-      warning("Classification target Y appeared to be a matrix, convert it to vector by taking maximum on each row",
+      warning("Classification label Y appeared to be a matrix, convert it to vector by taking maximum on each row",
               immediate = TRUE)
       Ynew = matrix(0, ns, 1)
       for (i in 1:ns) Ynew[i,] <- which(Y[i,] == max(Y[i,]))
@@ -236,8 +262,14 @@ modeltune <- function(train_fun = NULL, pred_fun = NULL, eval_type = "R",
         par_list <- eval(parse(text = paste('c(list(X[trn_idx, ], Y[trn_idx, ]), ', 'list(', par_name, ' = ', par_val[i], '))', sep = "")))
         model <- do.call(train_fun, par_list)
       }
-      pred <- pred_fun(model, X[tst_idx, ])
-      y_known_cv[tst_idx, ] <- Y[tst_idx, ]
+      # if (length(tst_idx) == 1)
+      #   pred <- pred_func(model, t(as.matrix(X[tst_idx,])))
+      # else
+      pred <- pred_fun(model, X[tst_idx, , drop = FALSE])
+      if (is.character(Y))
+        y_known_cv[tst_idx,] <- as.factor(Y[tst_idx,])
+      else
+        y_known_cv[tst_idx, ] <- Y[tst_idx, ]
       y_pred_cv[tst_idx, ] <- pred
     }
     if (eval_type == 'R'){
