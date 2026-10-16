@@ -10,7 +10,7 @@
 #' Only need to run this section on fresh installation
 install.packages('tidyverse')
 install.packages('tictoc')
-install.package('BiocManager')
+install.packages('BiocManager')
 BiocManager::install('xcms')
 
 
